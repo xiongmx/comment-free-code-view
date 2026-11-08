@@ -4,23 +4,39 @@ const Module = require('node:module');
 const path = require('node:path');
 
 let callback;
-let clipboard = '原有剪贴板';
-let clipboardShouldFail = false;
+let activeEditorListener;
+let textChangeListener;
+let closeDocumentListener;
+let documentNumber = 0;
 const notifications = [];
 class Position { constructor(line, character) { this.line = line; this.character = character; } }
 class Range { constructor(start, end) { this.start = start; this.end = end; } }
 const vscode = {
   Position, Range,
-  ProgressLocation: { Window: 10 },
-  commands: { registerCommand(id, fn) { assert.equal(id, 'copyCleanCode.copy'); callback = fn; return { dispose() {} }; } },
-  env: { clipboard: { async writeText(text) { if (clipboardShouldFail) throw new Error('模拟剪贴板故障'); clipboard = text; } } },
+  commands: {
+    registerCommand(id, fn) {
+      assert.equal(id, 'copyCleanCode.toggleFullLineComments');
+      callback = fn;
+      return { dispose() {} };
+    }
+  },
   window: {
     activeTextEditor: undefined,
+    visibleTextEditors: [],
+    createTextEditorDecorationType(options) {
+      assert.equal(options.opacity, '0');
+      assert.equal(options.isWholeLine, true);
+      return { dispose() {} };
+    },
+    onDidChangeActiveTextEditor(fn) { activeEditorListener = fn; return { dispose() {} }; },
     showInformationMessage: text => notifications.push(text),
     showWarningMessage: text => notifications.push(text),
     showErrorMessage: text => notifications.push(text),
-    setStatusBarMessage: text => notifications.push(text),
-    withProgress: async (_, task) => task()
+    setStatusBarMessage: text => notifications.push(text)
+  },
+  workspace: {
+    onDidChangeTextDocument(fn) { textChangeListener = fn; return { dispose() {} }; },
+    onDidCloseTextDocument(fn) { closeDocumentListener = fn; return { dispose() {} }; }
   }
 };
 const originalLoad = Module._load;
@@ -29,72 +45,66 @@ const extension = require(path.resolve(__dirname, '../dist/extension.cjs'));
 Module._load = originalLoad;
 extension.activate({ subscriptions: [] });
 
-function open(text, languageId, start, end) {
-  const offset = p => {
-    const lines = text.split('\n');
-    return lines.slice(0, p.line).reduce((n, line) => n + line.length + 1, 0) + p.character;
+function open(initialText, languageId) {
+  let text = initialText;
+  let version = 1;
+  const uri = `file:///test-${++documentNumber}.${languageId}`;
+  const document = {
+    uri: { toString: () => uri },
+    languageId,
+    get version() { return version; },
+    isDirty: false,
+    getText: () => text,
+    lineAt: line => ({ text: text.split(/\r\n|\n|\r/)[line] ?? '' }),
+    replaceText: value => { text = value; version++; }
   };
-  const selection = { start: start || new Position(0, 0), end: end || start || new Position(0, 0) };
-  selection.isEmpty = offset(selection.start) === offset(selection.end);
-  const document = Object.freeze({
-    languageId, version: 1, isDirty: false,
-    getText: range => range ? text.slice(offset(range.start), offset(range.end)) : text
-  });
-  // No edit, applyEdit, insert or replace implementation exists: edits must never be attempted.
-  vscode.window.activeTextEditor = Object.freeze({ document, selection });
-  return document;
+  const editor = {
+    document,
+    decorations: undefined,
+    setDecorations(type, ranges) { this.decorations = ranges; }
+  };
+  vscode.window.activeTextEditor = editor;
+  vscode.window.visibleTextEditors = [editor];
+  return { document, editor };
 }
 
-test('未打开编辑器：提示且不改剪贴板', async () => {
+test('未打开编辑器：提示且返回 no-editor', async () => {
   vscode.window.activeTextEditor = undefined;
-  clipboard = 'old';
-  assert.equal((await callback()).status, 'no-editor');
-  assert.equal(clipboard, 'old');
+  vscode.window.visibleTextEditors = [];
+  assert.deepEqual(await callback(), { status: 'no-editor' });
 });
 
-test('未知语言：拒绝猜测且保留剪贴板', async () => {
+test('未知语言：不尝试猜测注释语法', async () => {
   open('not // necessarily a comment', 'plaintext');
-  clipboard = 'old';
-  assert.equal((await callback()).status, 'unsupported');
-  assert.equal(clipboard, 'old');
+  assert.deepEqual(await callback(), { status: 'unsupported' });
 });
 
-test('无选区：复制全文且原文内容/版本/dirty完全不变', async () => {
-  const source = '\n// title\nconst url = "https://example.com"; // hi\n\nconst b = 2;\n';
-  const doc = open(source, 'javascript');
-  assert.deepEqual(await callback(), { status: 'copied', lines: 2 });
-  assert.equal(clipboard, 'const url = "https://example.com";\nconst b = 2;');
-  assert.equal(doc.getText(), source);
-  assert.equal(doc.version, 1);
-  assert.equal(doc.isDirty, false);
+test('切换只隐藏整行注释，保留行尾注释、字符串和源文档，再次运行恢复', async () => {
+  const source = '// title\nconst url = "https://example.com"; // trailing\n/* block comment */\nconst value = 1;';
+  const { document, editor } = open(source, 'javascript');
+  const first = await callback();
+  assert.deepEqual(first, { status: 'hidden', lines: 2 });
+  assert.deepEqual(editor.decorations.map(range => range.start.line), [0, 2]);
+  assert.deepEqual(editor.decorations.map(range => range.end.character), [8, 19]);
+  assert.equal(document.getText(), source);
+  assert.equal(document.version, 1);
+  assert.equal(document.isDirty, false);
+  assert.deepEqual(await callback(), { status: 'shown' });
+  assert.deepEqual(editor.decorations, []);
+  assert.equal(document.getText(), source);
+  assert.equal(document.version, 1);
 });
 
-test('选区优先于全文', async () => {
-  open('const outside = 0;\n// hi\nlet selected = 2; // delete\nconst tail = 3;', 'javascript', new Position(1, 0), new Position(3, 0));
-  assert.equal((await callback()).status, 'copied');
-  assert.equal(clipboard, 'let selected = 2;');
-});
-
-test('选区从块注释中间开始：继承前文词法状态', async () => {
-  open('/* title\nstill a comment\n*/ let a = 1; // bye', 'javascript', new Position(1, 0), new Position(2, 29));
-  assert.equal((await callback()).status, 'copied');
-  assert.equal(clipboard.trim(), 'let a = 1;');
-});
-
-test('全注释内容：复制空串，无多余换行', async () => {
-  open('// one\n/* two */\n\n ', 'javascript');
-  assert.deepEqual(await callback(), { status: 'copied', lines: 0 });
-  assert.equal(clipboard, '');
-});
-
-test('剪贴板写入失败：返回error且绝不改原文', async () => {
-  const doc = open('x = 1 # comment', 'python');
-  clipboardShouldFail = true;
-  clipboard = 'old';
-  try {
-    assert.equal((await callback()).status, 'error');
-    assert.equal(clipboard, 'old');
-    assert.equal(doc.getText(), 'x = 1 # comment');
-    assert.equal(doc.version, 1);
-  } finally { clipboardShouldFail = false; }
+test('隐藏状态会在文档编辑后重新识别注释行', async () => {
+  const { document, editor } = open('const value = 1;\n// old note', 'javascript');
+  assert.deepEqual(await callback(), { status: 'hidden', lines: 1 });
+  assert.deepEqual(editor.decorations.map(range => range.start.line), [1]);
+  document.replaceText('// new note\nconst value = 1;');
+  textChangeListener({ document });
+  await new Promise(resolve => setTimeout(resolve, 240));
+  assert.deepEqual(editor.decorations.map(range => range.start.line), [0]);
+  assert.equal(document.version, 2);
+  assert.deepEqual(await callback(), { status: 'shown' });
+  closeDocumentListener(document);
+  activeEditorListener(undefined);
 });

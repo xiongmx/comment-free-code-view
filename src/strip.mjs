@@ -69,7 +69,63 @@ function isCommentExplanation(explanation) {
     return name === 'comment' || name.startsWith('comment.') || name.includes('.comment.')
   }))
 }
-
+async function getCommentMask(source, lang) {
+  const mask = lang === 'nginx'
+    ? markNginxComments(source)
+    : new Uint8Array(source.length)
+  if (lang !== 'nginx') {
+    const highlighter = await getHighlighter()
+    const result = highlighter.codeToTokens(source, {
+      lang, theme: 'strip-comments-plain', includeExplanation: true
+    })
+    for (const line of result.tokens) {
+      for (const token of line) {
+        const explanation = token.explanation || []
+        let tokenOffset = token.offset || 0
+        for (const piece of explanation) {
+          const pieceEnd = tokenOffset + piece.content.length
+          if (isCommentExplanation([piece])) {
+            const from = Math.max(tokenOffset, 0)
+            const to = Math.min(pieceEnd, source.length)
+            if (to > from) mask.fill(1, from, to)
+          }
+          tokenOffset = pieceEnd
+        }
+      }
+    }
+  }
+  return mask
+}
+/** Return zero-based lines whose non-whitespace content is entirely a comment. */
+export async function findFullLineCommentLines(text, languageId) {
+  if (typeof text !== 'string') throw new TypeError('text must be a string')
+  const requested = typeof languageId === 'string' ? languageId.toLowerCase() : languageId
+  if (!isSupported(requested)) throw unsupported(languageId)
+  const source = text.replace(/\r\n?/g, '\n')
+  const mask = await getCommentMask(source, LANGUAGE_MAP[requested])
+  const lines = []
+  let lineStart = 0
+  let lineNumber = 0
+  while (lineStart <= source.length) {
+    const newline = source.indexOf('\n', lineStart)
+    const lineEnd = newline === -1 ? source.length : newline
+    let hasContent = false
+    let onlyComment = true
+    for (let offset = lineStart; offset < lineEnd; offset++) {
+      if (/\s/u.test(source[offset])) continue
+      hasContent = true
+      if (!mask[offset]) {
+        onlyComment = false
+        break
+      }
+    }
+    if (hasContent && onlyComment) lines.push(lineNumber)
+    if (newline === -1) break
+    lineStart = newline + 1
+    lineNumber++
+  }
+  return lines
+}
 /**
  * Remove comments using TextMate scopes, rather than a language-independent regexp.
  * `options.prefix` is a complete document prefix used to restore lexer state; it is
@@ -90,33 +146,8 @@ export async function stripComments(text, languageId, options = {}) {
   // Work in UTF-16 offsets (the same offsets used by Shiki/JS), preserving every
   // non-comment character. Explanation pieces are essential: a token can contain
   // both a string and punctuation, and must not be removed as one large token.
-  const removed = lang === 'nginx'
-    ? markNginxComments(source).subarray(start, end)
-    : new Uint8Array(end - start)
-  if (lang !== 'nginx') {
-    const highlighter = await getHighlighter()
-    const result = highlighter.codeToTokens(source, {
-      lang, theme: 'strip-comments-plain', includeExplanation: true
-    })
-    for (const line of result.tokens) {
-      for (const token of line) {
-        const explanation = token.explanation || []
-        // Shiki 4.x offsets are document-global (not line-relative).
-        let tokenOffset = token.offset || 0
-        for (const piece of explanation) {
-          const length = piece.content.length
-          const pieceStart = tokenOffset
-          const pieceEnd = pieceStart + length
-          if (isCommentExplanation([piece]) && pieceEnd > start && pieceStart < end) {
-            const from = Math.max(pieceStart, start) - start
-            const to = Math.min(pieceEnd, end) - start
-            removed.fill(1, from, to)
-          }
-          tokenOffset = pieceEnd
-        }
-      }
-    }
-  }
+  // Shiki offsets are document-global (not line-relative).
+  const removed = (await getCommentMask(source, lang)).subarray(start, end)
 
   // Shiki offsets are UTF-16. Build the result by slicing the original JS string
   // rather than indexing code points, so astral characters remain intact.

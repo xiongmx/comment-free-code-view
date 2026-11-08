@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { stripComments, isSupported, SUPPORTED_LANGUAGES } from '../src/strip.mjs'
+import { stripComments, findFullLineCommentLines, isSupported, SUPPORTED_LANGUAGES } from '../src/strip.mjs'
 
 const check = (name, language, input, expected, options) => test(name, async () => {
   assert.equal(await stripComments(input, language, options), expected)
@@ -147,3 +147,20 @@ test('Nginx aliases are recognized without claiming every conf file language', a
 check('Nginx user example removes hash-started lines and inline comments but preserves URL fragments', 'nginx',
   '# heading\n  # indented comment\nreturn 301 https://example/#fragment; # remove inline\nreturn 301 "https://example/#fragment"; # remove inline\n',
   'return 301 https://example/#fragment;\nreturn 301 "https://example/#fragment";')
+
+test('finds only full-line JavaScript comments, including multiline blocks', async () => {
+  const source = '  // full line\nconst value = 1; // trailing\nconst url = "// string";\n/* block start\n   block middle\n*/\n\t\n'
+  assert.deepEqual(await findFullLineCommentLines(source, 'javascript'), [0, 3, 4, 5])
+})
+
+test('uses language grammar rather than comment-looking string contents', async () => {
+  const python = '# a comment\nvalue = 1 # trailing\n"""docstring\n# literal text\n"""\n'
+  assert.deepEqual(await findFullLineCommentLines(python, 'python'), [0])
+  const nginx = '  # server note\nset $url "https://x/#keep";\nserver_name foo#bar;\n'
+  assert.deepEqual(await findFullLineCommentLines(nginx, 'nginx'), [0])
+})
+
+test('full-line scanning handles CRLF and rejects unsupported languages', async () => {
+  assert.deepEqual(await findFullLineCommentLines('x = 1\r\n# note\r\n', 'python'), [1])
+  await assert.rejects(() => findFullLineCommentLines('// note', 'plaintext'), (error) => error.code === 'UNSUPPORTED_LANGUAGE')
+})

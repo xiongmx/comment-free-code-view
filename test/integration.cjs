@@ -5,8 +5,8 @@ const path = require('node:path');
 const vscode = require('vscode');
 
 const EXTENSION_ID = 'xiongmx.copy-clean-code';
-const COMMAND = 'copyCleanCode.copy';
-const TITLE = '复制通用版非注释和空白行到剪贴板';
+const COMMAND = 'copyCleanCode.toggleFullLineComments';
+const TITLE = '显示/隐藏整行注释';
 const ROOT = path.resolve(__dirname, '..');
 const INSTALL_DIR = path.join(ROOT, 'artifacts', 'test-extensions');
 const RESULTS = path.join(ROOT, 'artifacts', 'integration-results.json');
@@ -34,32 +34,31 @@ async function close(doc) {
   await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
   if (doc && !doc.isClosed) await vscode.commands.executeCommand('workbench.action.closeAllEditors');
 }
-async function invoke(name, content, language, expected, selection) {
-  const { doc, editor } = await open(content, language);
+async function invokeToggle(name, content, language, expectedLines) {
+  const { doc } = await open(content, language);
   assert.equal(doc.languageId, language, `${name}: requested language mode was not registered`);
-  if (selection) editor.selection = new vscode.Selection(selection.start, selection.end);
   const beforeText = doc.getText();
   const beforeVersion = doc.version;
   const beforeDirty = doc.isDirty;
-  await vscode.env.clipboard.writeText('clipboard-sentinel');
-  const value = await vscode.commands.executeCommand(COMMAND);
-  const copied = await vscode.env.clipboard.readText();
-  assert.deepEqual(value, { status: 'copied', lines: expected ? expected.split('\n').length : 0 });
-  assert.equal(copied, expected, `${name}: clipboard`);
-  assert.equal(doc.getText(), beforeText, `${name}: source text changed`);
-  assert.equal(doc.version, beforeVersion, `${name}: document version changed`);
-  assert.equal(doc.isDirty, beforeDirty, `${name}: dirty state changed`);
+  const hidden = await vscode.commands.executeCommand(COMMAND);
+  assert.deepEqual(hidden, { status: 'hidden', lines: expectedLines }, `${name}: hide result`);
+  assert.equal(doc.getText(), beforeText, `${name}: source text changed while hiding`);
+  assert.equal(doc.version, beforeVersion, `${name}: document version changed while hiding`);
+  assert.equal(doc.isDirty, beforeDirty, `${name}: dirty state changed while hiding`);
+  assert.deepEqual(await vscode.commands.executeCommand(COMMAND), { status: 'shown' }, `${name}: show result`);
+  assert.equal(doc.getText(), beforeText, `${name}: source text changed while showing`);
+  assert.equal(doc.version, beforeVersion, `${name}: document version changed while showing`);
   await close(doc);
   pass(name);
 }
 async function invokeUnsupported() {
   const { doc } = await open('plain text\n// looks like a comment but plaintext is unsupported\n', 'plaintext');
-  await vscode.env.clipboard.writeText('do-not-overwrite');
+  const before = doc.getText();
   const value = await vscode.commands.executeCommand(COMMAND);
   assert.deepEqual(value, { status: 'unsupported' });
-  assert.equal(await vscode.env.clipboard.readText(), 'do-not-overwrite');
+  assert.equal(doc.getText(), before);
   await close(doc);
-  pass('unsupported plaintext does not overwrite clipboard');
+  pass('unsupported plaintext is not guessed or modified');
 }
 async function invokeNoEditor() {
   await vscode.commands.executeCommand('workbench.action.closeAllEditors');
@@ -77,7 +76,7 @@ async function main() {
     pass('installed extension path and lazy activation precondition');
 
     const manifest = JSON.parse(fs.readFileSync(path.join(ext.extensionPath, 'package.json'), 'utf8'));
-    assert.equal(manifest.version, '1.0.1');
+    assert.equal(manifest.version, '1.1.0');
     assert.equal(manifest.contributes.commands.find(x => x.command === COMMAND).title, TITLE);
     const menus = manifest.contributes.menus || {};
     assert.ok((menus['editor/context'] || []).some(x => x.command === COMMAND), 'editor/context menu missing');
@@ -94,37 +93,26 @@ async function main() {
     assert.ok(!languages.some(x => x.id === 'nginx-conf' || x.id === 'nginxconf'), 'third-party Nginx IDs must not be registered');
     pass('Nginx language registration and conservative filename matching');
 
-    const jsonc = '{\n  // header\n  "name": "demo",\n\n  /* removed block */\n  "enabled": true\n}\n';
-    await invoke('JSONC whole document', jsonc, 'jsonc', '{\n  "name": "demo",\n  "enabled": true\n}');
+    const jsonc = '{\n  // header\n  "name": "demo",\n\n  /* block comment */\n  "enabled": true\n}\n';
+    await invokeToggle('JSONC full-line comments hide and restore', jsonc, 'jsonc', 2);
     assert.equal(vscode.extensions.getExtension(EXTENSION_ID).isActive, true);
     pass('command auto activation');
 
     const html = '<!-- page comment\n  hidden line\n-->\n<div>hello</div>\n\n<!-- tail -->\n';
-    await invoke('HTML whole document', html, 'html', '<div>hello</div>');
+    await invokeToggle('HTML multiline and standalone comments', html, 'html', 4);
 
     const python = '# module comment\n\nvalue = 1\n# trailing comment\nprint(value)\n';
-    await invoke('Python whole document', python, 'python', 'value = 1\nprint(value)');
-    await invoke('all-comment document copies empty string', '# one\n# two\n\n', 'python', '');
+    await invokeToggle('Python full-line comments only', python, 'python', 2);
+    await invokeToggle('all-comment document', '# one\n# two\n\n', 'python', 2);
 
-    const selected = 'const a = 1;\n// omit this\nconst b = 2;\nconst c = 3;\n';
-    const selectedExpected = 'const b = 2;\nconst c = 3;';
-    await invoke('selected lines only', selected, 'javascript', selectedExpected, {
-      start: new vscode.Position(1, 0), end: new vscode.Position(3, selected.split('\n')[3].length)
-    });
+    const javascript = 'const a = 1;\n// standalone\nconst b = 2; // inline\nconst s = "// string";\n';
+    await invokeToggle('JavaScript preserves inline comments and string markers', javascript, 'javascript', 1);
 
-    await invoke('no selection means whole document', 'x = 1\n\n# comment\ny = 2\n', 'python', 'x = 1\ny = 2');
-
-    const nginx = '# server comment\nserver {\n    listen 80; # inline comment\n    server_name foo#bar;\n    set $double "quoted # hash";\n    set $single \'quoted # hash\';\n    set $escaped \\#literal;\n    set $slashes // /* not nginx comments */;\n}\n';
-    const nginxExpected = 'server {\n    listen 80;\n    server_name foo#bar;\n    set $double "quoted # hash";\n    set $single \'quoted # hash\';\n    set $escaped \\#literal;\n    set $slashes // /* not nginx comments */;\n}';
-    await invoke('Nginx standalone inline and token-boundary comments', nginx, 'nginx', nginxExpected);
-    await invoke('Nginx third-party language ID nginx-conf', nginx, 'nginx-conf', nginxExpected);
-    await invoke('Nginx third-party language ID nginxconf', nginx, 'nginxconf', nginxExpected);
-
-    const nginxSelection = 'set $value "prefix # keep"; # remove\nnext on;\n';
-    await invoke('Nginx selection starts inside quoted string', nginxSelection, 'nginx', 'prefix # keep";\nnext on;', {
-      start: new vscode.Position(0, 'set $value "'.length),
-      end: new vscode.Position(1, 'next on;'.length)
-    });
+    const nginx = '# server comment\nserver {\n    listen 80; # inline comment\n    server_name foo#bar;\n    set $double "quoted # hash";\n    set $slashes // /* not nginx comments */;\n}\n';
+    await invokeToggle('Nginx full-line comments only', nginx, 'nginx', 1);
+    await invokeToggle('Nginx third-party language ID nginx-conf', nginx, 'nginx-conf', 1);
+    await invokeToggle('Nginx third-party language ID nginxconf', nginx, 'nginxconf', 1);
+    await invokeToggle('Nginx inline-only comments do not hide code lines', 'listen 80; # inline\nserver_name foo#bar;\n', 'nginx', 0);
 
     const autoPath = path.join(ROOT, 'artifacts', 'nginx.conf');
     const ordinaryConfPath = path.join(ROOT, 'artifacts', 'integration-ordinary.conf');
@@ -140,15 +128,6 @@ async function main() {
     fs.rmSync(autoPath, { force: true });
     fs.rmSync(ordinaryConfPath, { force: true });
     pass('nginx.conf auto-detection without claiming ordinary .conf');
-
-    const commentContext = '<!--\nhidden\n-->\n<div>visible</div>\n';
-    await invoke('selection starts inside multiline HTML comment', commentContext, 'html', '<div>visible</div>', {
-      start: new vscode.Position(1, 0), end: new vscode.Position(3, commentContext.split('\n')[3].length)
-    });
-    const stringContext = '"""\nfake = 1\n"""\nreal = 2\n';
-    await invoke('selection starts inside multiline Python string', stringContext, 'python', 'fake = 1\n"""\nreal = 2', {
-      start: new vscode.Position(1, 0), end: new vscode.Position(3, stringContext.split('\n')[3].length)
-    });
 
     await invokeUnsupported();
     await invokeNoEditor();

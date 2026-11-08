@@ -1,8 +1,8 @@
 {
   "name": "copy-clean-code",
-  "displayName": "复制通用版非注释和空白行",
-  "description": "按语言语法识别注释，将选区或全文去除注释和空白行后复制到剪贴板，不修改文档。",
-  "version": "1.0.1",
+  "displayName": "显示/隐藏整行注释",
+  "description": "按语言语法识别并切换整行注释的显示状态，不修改文档。",
+  "version": "1.1.0",
   "publisher": "xiongmx",
   "license": "MIT",
   "engines": {
@@ -12,15 +12,13 @@
     "Other"
   ],
   "keywords": [
-    "copy",
-    "clipboard",
     "comments",
     "注释",
     "空白行"
   ],
   "main": "./dist/extension.cjs",
   "activationEvents": [
-    "onCommand:copyCleanCode.copy"
+    "onCommand:copyCleanCode.toggleFullLineComments"
   ],
   "capabilities": {
     "untrustedWorkspaces": {
@@ -48,22 +46,22 @@
     ],
     "commands": [
       {
-        "command": "copyCleanCode.copy",
-        "title": "复制通用版非注释和空白行到剪贴板",
-        "category": "代码清理"
+        "command": "copyCleanCode.toggleFullLineComments",
+        "title": "显示/隐藏整行注释",
+        "category": "注释"
       }
     ],
     "menus": {
       "editor/context": [
         {
-          "command": "copyCleanCode.copy",
+          "command": "copyCleanCode.toggleFullLineComments",
           "when": "editorTextFocus",
           "group": "9_cutcopypaste@5"
         }
       ],
       "commandPalette": [
         {
-          "command": "copyCleanCode.copy"
+          "command": "copyCleanCode.toggleFullLineComments"
         }
       ]
     }
@@ -73,7 +71,7 @@
     "vscode:prepublish": "npm run build",
     "test": "node --test test/strip.test.mjs test/extension.test.cjs",
     "test:integration": "xvfb-run -a node test/run-integration.cjs",
-    "package": "vsce package --no-dependencies --allow-missing-repository --out artifacts/copy-clean-code-1.0.1.vsix"
+    "package": "vsce package --no-dependencies --allow-missing-repository --out artifacts/copy-clean-code-1.1.0.vsix"
   },
   "dependencies": {
     "shiki": "4.5.0"
