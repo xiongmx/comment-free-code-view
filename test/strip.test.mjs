@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { stripComments, findFullLineCommentLines, isSupported, SUPPORTED_LANGUAGES } from '../src/strip.mjs'
+import { stripComments, findFullLineCommentLines, createCleanView, isSupported, SUPPORTED_LANGUAGES } from '../src/strip.mjs'
 
 const check = (name, language, input, expected, options) => test(name, async () => {
   assert.equal(await stripComments(input, language, options), expected)
@@ -163,4 +163,24 @@ test('uses language grammar rather than comment-looking string contents', async 
 test('full-line scanning handles CRLF and rejects unsupported languages', async () => {
   assert.deepEqual(await findFullLineCommentLines('x = 1\r\n# note\r\n', 'python'), [1])
   await assert.rejects(() => findFullLineCommentLines('// note', 'plaintext'), (error) => error.code === 'UNSUPPORTED_LANGUAGE')
+})
+
+test('clean view removes full-line comments and layout blanks without changing code or CRLF choice', async () => {
+  const source = '// header\r\n\r\nconst a = 1; // keep inline\r\n  /* block\r\n     middle\r\n  */\r\n \t\r\nconst b = "// keep string";\r\n'
+  const result = await createCleanView(source, 'javascript', { newline: '\r\n' })
+  assert.equal(result.text, 'const a = 1; // keep inline\r\nconst b = "// keep string";')
+  assert.equal(result.commentLines.length, 4)
+  assert.equal(result.blankLines, 3)
+  assert.equal(source.includes('// header'), true)
+})
+
+test('clean view removes every blank line, including inside Python strings and YAML block scalars', async () => {
+  const python = 'value = """first\n\n# literal text\n\nlast"""\n\nnext_value = 1'
+  const pythonView = await createCleanView(python, 'python')
+  assert.equal(pythonView.text, 'value = """first\n# literal text\nlast"""\nnext_value = 1')
+  assert.equal(pythonView.blankLines, 3)
+  const yaml = 'text: |\n  first\n\n  second\n\nnext: ok'
+  const yamlView = await createCleanView(yaml, 'yaml')
+  assert.equal(yamlView.text, 'text: |\n  first\n  second\nnext: ok')
+  assert.equal(yamlView.blankLines, 2)
 })

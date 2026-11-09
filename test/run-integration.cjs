@@ -9,7 +9,9 @@ const root = path.resolve(__dirname, '..');
 const artifacts = path.join(root, 'artifacts');
 const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
 const version = packageJson.version;
-const vsix = path.join(artifacts, `copy-clean-code-${version}.vsix`);
+const vsix = process.env.COPY_CLEAN_CODE_VSIX
+  ? path.resolve(process.env.COPY_CLEAN_CODE_VSIX)
+  : path.join(artifacts, `comment-free-code-view-${version}.vsix`);
 const extensionDir = path.join(artifacts, 'test-extensions');
 const userDataDir = path.join(artifacts, 'test-user-data');
 const logFile = path.join(artifacts, 'install.log');
@@ -45,7 +47,7 @@ const runCli = (cli, args) => spawnSync(cli, args, { cwd: root, encoding: 'utf8'
   const listed = runCli(cli, [...baseCliArgs, '--no-sandbox', '--user-data-dir', userDataDir, '--extensions-dir', extensionDir, '--list-extensions', '--show-versions']);
   appendLog(`$ ${vscodeExecutablePath} --list-extensions --show-versions\n${listed.stdout || ''}${listed.stderr || ''}exit=${listed.status}`);
   const listedOutput = listed.stdout || '';
-  if (listed.status !== 0 || !new RegExp(`xiongmx\\.copy-clean-code@${version.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&')}`, 'i').test(listedOutput)) {
+  if (listed.status !== 0 || !new RegExp(`xiongmx\\.comment-free-code-view@${version.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&')}`, 'i').test(listedOutput)) {
     throw new Error(`Installed extension ${packageJson.name}@${version} was not found by --list-extensions --show-versions`);
   }
 

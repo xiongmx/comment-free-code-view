@@ -1,5 +1,5 @@
 {
-  "name": "copy-clean-code-integration-harness",
+  "name": "comment-free-code-view-integration-harness",
   "version": "1.0.0",
   "private": true,
   "engines": { "vscode": "^1.80.0" },

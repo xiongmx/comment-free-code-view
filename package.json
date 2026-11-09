@@ -1,8 +1,8 @@
 {
-  "name": "copy-clean-code",
-  "displayName": "显示/隐藏整行注释",
-  "description": "按语言语法识别并切换整行注释的显示状态，不修改文档。",
-  "version": "1.1.0",
+  "name": "comment-free-code-view",
+  "displayName": "无注释代码视图编辑",
+  "description": "在可编辑的无注释拆分视图中修改代码，跟随定位到原文并保留原注释与空白。",
+  "version": "1.2.0",
   "publisher": "xiongmx",
   "license": "MIT",
   "engines": {
@@ -47,7 +47,7 @@
     "commands": [
       {
         "command": "copyCleanCode.toggleFullLineComments",
-        "title": "显示/隐藏整行注释",
+        "title": "去注释视图编辑",
         "category": "注释"
       }
     ],
@@ -69,9 +69,9 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "vscode:prepublish": "npm run build",
-    "test": "node --test test/strip.test.mjs test/extension.test.cjs",
+    "test": "node --test test/strip.test.mjs test/sync.test.mjs test/extension.test.cjs",
     "test:integration": "xvfb-run -a node test/run-integration.cjs",
-    "package": "vsce package --no-dependencies --allow-missing-repository --out artifacts/copy-clean-code-1.1.0.vsix"
+    "package": "vsce package --no-dependencies --allow-missing-repository --out artifacts/comment-free-code-view-1.2.0.vsix"
   },
   "dependencies": {
     "shiki": "4.5.0"

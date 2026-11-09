@@ -126,6 +126,24 @@ export async function findFullLineCommentLines(text, languageId) {
   }
   return lines
 }
+/** Build copyable text without full-line comments or any blank lines; the source is untouched. */
+export async function createCleanView(text, languageId, options = {}) {
+  if (typeof text !== 'string') throw new TypeError('text must be a string')
+  const commentLines = await findFullLineCommentLines(text, languageId)
+  const commentSet = new Set(commentLines)
+  const sourceLines = text.split(/\r\n|\n|\r/)
+  let blankLines = 0
+  const visibleLines = sourceLines.filter((line, index) => {
+    if (commentSet.has(index)) return false
+    if (!/\S/u.test(line)) {
+      blankLines++
+      return false
+    }
+    return true
+  })
+  const newline = options.newline === '\r\n' ? '\r\n' : '\n'
+  return { text: visibleLines.join(newline), commentLines, blankLines }
+}
 /**
  * Remove comments using TextMate scopes, rather than a language-independent regexp.
  * `options.prefix` is a complete document prefix used to restore lexer state; it is
